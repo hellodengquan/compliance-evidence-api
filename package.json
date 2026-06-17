@@ -1,0 +1,15 @@
+{
+  "name": "compliance-evidence-api",
+  "version": "1.0.0",
+  "description": "合规证据归集后端系统",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "init-db": "node db/init.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.21.0",
+    "multer": "^1.4.5-lts.1"
+  }
+}
