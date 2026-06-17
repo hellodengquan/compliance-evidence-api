@@ -20,22 +20,38 @@ router.post('/', (req, res) => {
 
   const db = getDb();
   try {
-    const evidence = db.prepare('SELECT * FROM evidence WHERE id = ?').get(Number(evidence_id));
-    if (!evidence) {
-      return res.status(404).json({ error: '关联的证据不存在' });
-    }
+    const result = db.transaction(() => {
+      const evidence = db.prepare('SELECT * FROM evidence WHERE id = ?').get(Number(evidence_id));
+      if (!evidence) {
+        const err = new Error('关联的证据不存在');
+        err.statusCode = 404;
+        throw err;
+      }
 
-    const stmt = db.prepare(
-      'INSERT INTO reviews (evidence_id, reviewer, status, comment) VALUES (?, ?, ?, ?)'
-    );
-    const result = stmt.run(Number(evidence_id), reviewer, 'pending', comment || null);
+      const pendingReview = db.prepare(
+        "SELECT * FROM reviews WHERE evidence_id = ? AND status = 'pending'"
+      ).get(Number(evidence_id));
+      if (pendingReview) {
+        const err = new Error('该证据已有待处理的审核记录，请勿重复发起');
+        err.statusCode = 409;
+        throw err;
+      }
 
-    db.prepare("UPDATE evidence SET status = 'under_review' WHERE id = ?").run(Number(evidence_id));
+      const insertStmt = db.prepare(
+        'INSERT INTO reviews (evidence_id, reviewer, status, comment) VALUES (?, ?, ?, ?)'
+      );
+      const insertResult = insertStmt.run(Number(evidence_id), reviewer, 'pending', comment || null);
 
-    const review = db.prepare('SELECT * FROM reviews WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json(review);
+      db.prepare("UPDATE evidence SET status = 'under_review' WHERE id = ?").run(Number(evidence_id));
+
+      const review = db.prepare('SELECT * FROM reviews WHERE id = ?').get(insertResult.lastInsertRowid);
+      return review;
+    })();
+
+    res.status(201).json(result);
   } catch (err) {
-    res.status(500).json({ error: '创建审核记录失败' });
+    const statusCode = err.statusCode || 500;
+    res.status(statusCode).json({ error: err.message || '创建审核记录失败' });
   }
 });
 
@@ -95,27 +111,36 @@ router.put('/:id/status', (req, res) => {
 
   const db = getDb();
   try {
-    const existing = db.prepare('SELECT * FROM reviews WHERE id = ?').get(req.params.id);
-    if (!existing) {
-      return res.status(404).json({ error: '审核记录不存在' });
-    }
+    const result = db.transaction(() => {
+      const existing = db.prepare('SELECT * FROM reviews WHERE id = ?').get(req.params.id);
+      if (!existing) {
+        const err = new Error('审核记录不存在');
+        err.statusCode = 404;
+        throw err;
+      }
 
-    if (existing.status !== 'pending') {
-      return res.status(400).json({ error: `审核记录已处于 ${existing.status} 状态，不可再变更` });
-    }
+      if (existing.status !== 'pending') {
+        const err = new Error(`审核记录已处于 ${existing.status} 状态，不可再变更`);
+        err.statusCode = 400;
+        throw err;
+      }
 
-    const updateReview = db.prepare(
-      'UPDATE reviews SET status = ?, comment = ? WHERE id = ?'
-    );
-    updateReview.run(status, comment || existing.comment, req.params.id);
+      const updateReviewStmt = db.prepare(
+        'UPDATE reviews SET status = ?, comment = ? WHERE id = ?'
+      );
+      updateReviewStmt.run(status, comment || existing.comment, req.params.id);
 
-    const evidenceStatus = STATUS_TRANSITION_MAP[status] || 'submitted';
-    db.prepare('UPDATE evidence SET status = ? WHERE id = ?').run(evidenceStatus, existing.evidence_id);
+      const evidenceStatus = STATUS_TRANSITION_MAP[status] || 'submitted';
+      db.prepare('UPDATE evidence SET status = ? WHERE id = ?').run(evidenceStatus, existing.evidence_id);
 
-    const updated = db.prepare('SELECT * FROM reviews WHERE id = ?').get(req.params.id);
-    res.json(updated);
+      const updated = db.prepare('SELECT * FROM reviews WHERE id = ?').get(req.params.id);
+      return updated;
+    })();
+
+    res.json(result);
   } catch (err) {
-    res.status(500).json({ error: '更新审核状态失败' });
+    const statusCode = err.statusCode || 500;
+    res.status(statusCode).json({ error: err.message || '更新审核状态失败' });
   }
 });
 
