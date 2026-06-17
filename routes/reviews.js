@@ -8,7 +8,7 @@ const VALID_REVIEW_STATUSES = ['pending', 'approved', 'rejected', 'resubmit'];
 const STATUS_TRANSITION_MAP = {
   approved: 'approved',
   rejected: 'rejected',
-  resubmit: 'resubmit'
+  resubmit: 'submitted'
 };
 
 router.post('/', (req, res) => {
@@ -126,9 +126,15 @@ router.put('/:id/status', (req, res) => {
       }
 
       const updateReviewStmt = db.prepare(
-        'UPDATE reviews SET status = ?, comment = ? WHERE id = ?'
+        'UPDATE reviews SET status = ?, comment = ?, reviewed_at = datetime(\'now\', \'localtime\') WHERE id = ? AND status = \'pending\''
       );
-      updateReviewStmt.run(status, comment || existing.comment, req.params.id);
+      const updateResult = updateReviewStmt.run(status, comment || existing.comment, req.params.id);
+
+      if (updateResult.changes === 0) {
+        const err = new Error('审核状态已被其他操作变更，请刷新后重试');
+        err.statusCode = 409;
+        throw err;
+      }
 
       const evidenceStatus = STATUS_TRANSITION_MAP[status] || 'submitted';
       db.prepare('UPDATE evidence SET status = ? WHERE id = ?').run(evidenceStatus, existing.evidence_id);
