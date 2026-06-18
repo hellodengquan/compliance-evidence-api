@@ -1,7 +1,8 @@
 const express = require('express');
 const session = require('express-session');
+const SqliteStoreFactory = require('better-sqlite3-session-store');
 const { initDatabase } = require('./db/init');
-const { closeDb } = require('./db/database');
+const { getDb, closeDb } = require('./db/database');
 const controlsRouter = require('./routes/controls');
 const evidenceRouter = require('./routes/evidence');
 const reviewsRouter = require('./routes/reviews');
@@ -10,23 +11,43 @@ const authRouter = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SESSION_SECRET = process.env.SESSION_SECRET || 'compliance-evidence-secret-change-in-prod';
 
 initDatabase();
+
+const SqliteStore = SqliteStoreFactory(session);
+const sessionStore = new SqliteStore({
+  client: getDb(),
+  expired: {
+    clear: true,
+    intervalMs: 900000
+  }
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(session({
+  store: sessionStore,
   name: 'compliance.sid',
-  secret: process.env.SESSION_SECRET || 'compliance-evidence-secret-change-in-prod',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  rolling: true,
   cookie: {
     httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
     maxAge: 24 * 60 * 60 * 1000,
-    sameSite: 'lax'
+    sameSite: 'strict'
   }
 }));
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 
 app.use('/api/auth', authRouter);
 app.use('/api/controls', controlsRouter);
@@ -55,6 +76,8 @@ app.use((req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log(`合规证据归集系统已启动: http://localhost:${PORT}`);
+  console.log(`Session 存储: SQLite (持久化)`);
+  console.log(`Cookie SameSite: Strict`);
 });
 
 process.on('SIGINT', () => {
