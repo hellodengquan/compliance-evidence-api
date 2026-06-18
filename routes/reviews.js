@@ -1,5 +1,6 @@
 const express = require('express');
 const { getDb } = require('../db/database');
+const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -11,12 +12,16 @@ const STATUS_TRANSITION_MAP = {
   resubmit: 'submitted'
 };
 
-router.post('/', (req, res) => {
-  const { evidence_id, reviewer, comment } = req.body;
+router.use(requireAuth);
 
-  if (!evidence_id || !reviewer) {
-    return res.status(400).json({ error: 'evidence_id 和 reviewer 为必填项' });
+router.post('/', (req, res) => {
+  const { evidence_id, comment } = req.body;
+
+  if (!evidence_id) {
+    return res.status(400).json({ error: 'evidence_id 为必填项' });
   }
+
+  const reviewer = req.currentUser.username;
 
   const db = getDb();
   try {
@@ -85,6 +90,24 @@ router.get('/', (req, res) => {
   }
 });
 
+router.get('/evidence/:evidenceId/history', (req, res) => {
+  const db = getDb();
+  try {
+    const evidence = db.prepare('SELECT * FROM evidence WHERE id = ?').get(req.params.evidenceId);
+    if (!evidence) {
+      return res.status(404).json({ error: '证据不存在' });
+    }
+
+    const history = db.prepare(
+      'SELECT * FROM reviews WHERE evidence_id = ? ORDER BY reviewed_at ASC'
+    ).all(req.params.evidenceId);
+
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: '查询审核历史失败' });
+  }
+});
+
 router.get('/:id', (req, res) => {
   const db = getDb();
   try {
@@ -109,6 +132,8 @@ router.put('/:id/status', (req, res) => {
     return res.status(400).json({ error: '不能将审核状态重置为 pending' });
   }
 
+  const currentUser = req.currentUser;
+
   const db = getDb();
   try {
     const result = db.transaction(() => {
@@ -122,6 +147,14 @@ router.put('/:id/status', (req, res) => {
       if (existing.status !== 'pending') {
         const err = new Error(`审核记录已处于 ${existing.status} 状态，不可再变更`);
         err.statusCode = 400;
+        throw err;
+      }
+
+      const isOriginalReviewer = existing.reviewer === currentUser.username;
+      const isAdmin = currentUser.role === 'admin';
+      if (!isOriginalReviewer && !isAdmin) {
+        const err = new Error('仅原审核人或管理员可变更审核状态');
+        err.statusCode = 403;
         throw err;
       }
 
@@ -147,24 +180,6 @@ router.put('/:id/status', (req, res) => {
   } catch (err) {
     const statusCode = err.statusCode || 500;
     res.status(statusCode).json({ error: err.message || '更新审核状态失败' });
-  }
-});
-
-router.get('/evidence/:evidenceId/history', (req, res) => {
-  const db = getDb();
-  try {
-    const evidence = db.prepare('SELECT * FROM evidence WHERE id = ?').get(req.params.evidenceId);
-    if (!evidence) {
-      return res.status(404).json({ error: '证据不存在' });
-    }
-
-    const history = db.prepare(
-      'SELECT * FROM reviews WHERE evidence_id = ? ORDER BY reviewed_at ASC'
-    ).all(req.params.evidenceId);
-
-    res.json(history);
-  } catch (err) {
-    res.status(500).json({ error: '查询审核历史失败' });
   }
 });
 

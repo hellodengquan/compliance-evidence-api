@@ -1,10 +1,12 @@
 const express = require('express');
+const session = require('express-session');
 const { initDatabase } = require('./db/init');
 const { closeDb } = require('./db/database');
 const controlsRouter = require('./routes/controls');
 const evidenceRouter = require('./routes/evidence');
 const reviewsRouter = require('./routes/reviews');
 const exportsRouter = require('./routes/exports');
+const authRouter = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,6 +16,19 @@ initDatabase();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use(session({
+  name: 'compliance.sid',
+  secret: process.env.SESSION_SECRET || 'compliance-evidence-secret-change-in-prod',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000,
+    sameSite: 'lax'
+  }
+}));
+
+app.use('/api/auth', authRouter);
 app.use('/api/controls', controlsRouter);
 app.use('/api/evidence', evidenceRouter);
 app.use('/api/reviews', reviewsRouter);
